@@ -11,7 +11,7 @@
 //	{
 //	  "mcpServers": {
 //	    "docutil": {
-//	      "command": "/path/to/doc_util-mcp"
+//	      "command": "/path/to/doc-util-mcp"
 //	    }
 //	  }
 //	}

@@ -4,7 +4,7 @@ set -euo pipefail
 # ────────────────────────────────────────────────────────────────
 # 部署 docutil HTTP 服务，参考 llm_agent 的部署方式：
 #   - 复用虚拟网桥 llm_net，与其他 llm_agent 服务互通
-#   - 以容器名 doc_util 注册到网桥，供网桥内其他容器访问
+#   - 以容器名 doc-util 注册到网桥，供网桥内其他容器访问
 #
 # 使用前先构建镜像：
 #   ./build/build_server.sh
@@ -13,10 +13,10 @@ set -euo pipefail
 #   ./deploy/deploy_server.sh
 # ────────────────────────────────────────────────────────────────
 
-CONTAINER="doc_util"
+CONTAINER="doc-util"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(cat "$SCRIPT_DIR/VERSION")"
-IMAGE="doc_util:$VERSION"
+IMAGE="doc-util:$VERSION"
 
 # 确保镜像存在
 if ! docker image inspect "$IMAGE" &>/dev/null; then
@@ -48,9 +48,9 @@ echo "部署完成"
 # 注意：TLS 默认启用（自签名证书），证书 SAN 为 localhost，其他容器需 --insecure
 echo -e "\n\033[1;31m══════════════════════════════════════════════════════════════\033[0m"
 echo -e "\033[1;31m  llm_net 网络内访问地址（同宿主机其他容器可用）：          \033[0m"
-echo -e "\033[1;31m      https://doc_util:8080                           \033[0m"
+echo -e "\033[1;31m      https://doc-util:8080                           \033[0m"
 echo -e "\033[1;31m  注意：证书为自签名（SAN: localhost），客户端需 -k/--insecure\033[0m"
-echo -e "\033[1;31m      curl -k https://doc_util:8080/health            \033[0m"
+echo -e "\033[1;31m      curl -k https://doc-util:8080/health            \033[0m"
 echo -e "\033[1;31m══════════════════════════════════════════════════════════════\033[0m\n"
 
 docker logs -f "$CONTAINER"

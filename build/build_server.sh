@@ -30,7 +30,7 @@ usage() {
   ./build/build_server.sh http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890
 
 说明:
-  直接构建生产 Docker 镜像 doc_util:$VERSION（Server 始终集成 OCR）。
+  直接构建生产 Docker 镜像 doc-util:$VERSION（Server 始终集成 OCR）。
 EOF
 }
 
@@ -117,7 +117,7 @@ ONNXRT_LIB="$SCRIPT_DIR/dist/cache/deps/onnxruntime"
 
 # ── 1. Build binary in build container ─────────────────────────
 echo ""
-echo "=== Step 1/2: Building doc_util binary ==="
+echo "=== Step 1/2: Building doc-util binary ==="
 docker run --rm \
   -v "$SCRIPT_DIR":/workspace \
   -v "$GOCACHE_DIR":/tmp/gocache \
@@ -135,12 +135,12 @@ docker run --rm \
   -e GOARCH=amd64 \
   "$IMAGE" \
   bash -c "
-    rm -rf /workspace/dist/doc_util
-    go build ${GO_BUILD_X} -mod=mod -ldflags='-s -w -r \$ORIGIN' -o dist/doc_util ./cmd/server/ && \
+    rm -rf /workspace/dist/doc-util
+    go build ${GO_BUILD_X} -mod=mod -ldflags='-s -w -r \$ORIGIN' -o dist/doc-util ./cmd/server/ && \
     echo 'Build complete.'
   "
 
-echo "  dist/doc_util ($(du -h "$SCRIPT_DIR/dist/doc_util" | cut -f1))"
+echo "  dist/doc-util ($(du -h "$SCRIPT_DIR/dist/doc-util" | cut -f1))"
 
 # ── 2. Bundle deps + package Docker image ───────────────────────
 rm -rf "$SCRIPT_DIR"/dist/libonnxruntime.so* "$SCRIPT_DIR/dist/models"
@@ -153,21 +153,21 @@ cp -r "$SCRIPT_DIR/models" "$SCRIPT_DIR/dist/models"
 cp -a "$SCRIPT_DIR/certs/cert.pem" "$SCRIPT_DIR/certs/key.pem" "$SCRIPT_DIR/dist/"
 
 echo ""
-echo "=== Step 2/2: Building Docker image doc_util:$VERSION ==="
-docker build "${DOCKER_BUILD_ARGS[@]+"${DOCKER_BUILD_ARGS[@]}"}" -t doc_util:"$VERSION" -f build/Dockerfile.server "$SCRIPT_DIR"
+echo "=== Step 2/2: Building Docker image doc-util:$VERSION ==="
+docker build "${DOCKER_BUILD_ARGS[@]+"${DOCKER_BUILD_ARGS[@]}"}" -t doc-util:"$VERSION" -f build/Dockerfile.server "$SCRIPT_DIR"
 
 # Clean up intermediate files from dist/ (keep certs/ as durable assets).
-rm -rf "$SCRIPT_DIR/dist/doc_util" "$SCRIPT_DIR"/dist/libonnxruntime.so* "$SCRIPT_DIR/dist/models" "$SCRIPT_DIR"/dist/cert.pem "$SCRIPT_DIR"/dist/key.pem
+rm -rf "$SCRIPT_DIR/dist/doc-util" "$SCRIPT_DIR"/dist/libonnxruntime.so* "$SCRIPT_DIR/dist/models" "$SCRIPT_DIR"/dist/cert.pem "$SCRIPT_DIR"/dist/key.pem
 
 echo ""
 echo "=== Done ==="
-echo "  Docker image: doc_util:$VERSION"
+echo "  Docker image: doc-util:$VERSION"
 echo ""
 echo "Run with:"
-echo "  docker run -d --rm --name doc_util -p 20002:8080 \\"
+echo "  docker run -d --rm --name doc-util -p 20002:8080 \\"
 echo "    -v \$(pwd)/logs:/app/logs \\"
-echo "    doc_util:$VERSION"
-echo "  docker logs -f doc_util"
+echo "    doc-util:$VERSION"
+echo "  docker logs -f doc-util"
 echo ""
 echo "HTTPS enabled by default (self-signed cert for localhost)."
 echo "  Health check: curl -k https://localhost:20002/health"

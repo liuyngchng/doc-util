@@ -30,7 +30,7 @@ usage() {
   ./build/build_mcp.sh http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890
 
 说明:
-  直接构建生产 Docker 镜像 doc_util-mcp:$VERSION（MCP 始终集成 OCR）。
+  直接构建生产 Docker 镜像 doc-util-mcp:$VERSION（MCP 始终集成 OCR）。
 EOF
 }
 
@@ -117,7 +117,7 @@ ONNXRT_LIB="$SCRIPT_DIR/dist/cache/deps/onnxruntime"
 
 # ── 1. Build binary in build container ─────────────────────────
 echo ""
-echo "=== Step 1/2: Building doc_util-mcp binary ==="
+echo "=== Step 1/2: Building doc-util-mcp binary ==="
 docker run --rm \
   -v "$SCRIPT_DIR":/workspace \
   -v "$GOCACHE_DIR":/tmp/gocache \
@@ -135,12 +135,12 @@ docker run --rm \
   -e GOARCH=amd64 \
   "$IMAGE" \
   bash -c "
-    rm -rf /workspace/dist/doc_util-mcp
-    go build ${GO_BUILD_X} -mod=mod -ldflags='-s -w -r \$ORIGIN' -o dist/doc_util-mcp ./cmd/mcp/ && \
+    rm -rf /workspace/dist/doc-util-mcp
+    go build ${GO_BUILD_X} -mod=mod -ldflags='-s -w -r \$ORIGIN' -o dist/doc-util-mcp ./cmd/mcp/ && \
     echo 'Build complete.'
   "
 
-echo "  dist/doc_util-mcp ($(du -h "$SCRIPT_DIR/dist/doc_util-mcp" | cut -f1))"
+echo "  dist/doc-util-mcp ($(du -h "$SCRIPT_DIR/dist/doc-util-mcp" | cut -f1))"
 
 # ── 2. Bundle deps + package Docker image ───────────────────────
 rm -rf "$SCRIPT_DIR"/dist/libonnxruntime.so* "$SCRIPT_DIR/dist/models"
@@ -149,20 +149,20 @@ cp -a "$ONNXRT_LIB/lib/libonnxruntime.so"* "$SCRIPT_DIR/dist/"
 cp -r "$SCRIPT_DIR/models" "$SCRIPT_DIR/dist/models"
 
 echo ""
-echo "=== Step 2/2: Building Docker image doc_util-mcp:$VERSION ==="
-docker build "${DOCKER_BUILD_ARGS[@]+"${DOCKER_BUILD_ARGS[@]}"}" -t doc_util-mcp:"$VERSION" -f build/Dockerfile.mcp "$SCRIPT_DIR"
+echo "=== Step 2/2: Building Docker image doc-util-mcp:$VERSION ==="
+docker build "${DOCKER_BUILD_ARGS[@]+"${DOCKER_BUILD_ARGS[@]}"}" -t doc-util-mcp:"$VERSION" -f build/Dockerfile.mcp "$SCRIPT_DIR"
 
 # Clean up intermediate files from dist/.
-rm -rf "$SCRIPT_DIR/dist/doc_util-mcp" "$SCRIPT_DIR"/dist/libonnxruntime.so* "$SCRIPT_DIR/dist/models"
+rm -rf "$SCRIPT_DIR/dist/doc-util-mcp" "$SCRIPT_DIR"/dist/libonnxruntime.so* "$SCRIPT_DIR/dist/models"
 
 echo ""
 echo "=== Done ==="
-echo "  Docker image: doc_util-mcp:$VERSION"
+echo "  Docker image: doc-util-mcp:$VERSION"
 echo ""
 echo "Run with:"
-echo "  docker run -i --rm doc_util-mcp:$VERSION"
+echo "  docker run -i --rm doc-util-mcp:$VERSION"
 echo ""
 echo "Or register directly with an MCP client:"
 echo "  {"
-echo "    \"command\": \"/path/to/doc_util-mcp\""
+echo "    \"command\": \"/path/to/doc-util-mcp\""
 echo "  }"

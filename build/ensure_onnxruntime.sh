@@ -58,6 +58,6 @@ trap 'rm -rf "$tmp"' EXIT
 tar -C "$tmp" -xzf "$ORT_TARBALL"
 src="$(find "$tmp" -maxdepth 1 -mindepth 1 -type d | head -1)"
 [[ -n "$src" ]] || { echo "ERROR: unexpected tarball layout (no top-level dir)" >&2; exit 1; }
-cp -r "$src/include" "$ORT_DIR/"
-cp -r "$src/lib"     "$ORT_DIR/"
+cp -rL "$src/include" "$ORT_DIR/"
+cp -rL "$src/lib"     "$ORT_DIR/"
 echo "ONNX Runtime installed to dist/cache/deps/onnxruntime/ (include/ + lib/)"

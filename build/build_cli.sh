@@ -17,7 +17,7 @@ set -euo pipefail
 # ────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_IMAGE="docutil_build:latest"
+BUILD_IMAGE="doc-util-build:latest"
 
 # ── Usage ───────────────────────────────────────────────────────
 usage() {

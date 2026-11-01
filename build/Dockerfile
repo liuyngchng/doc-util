@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ================================================================
-# docutil build image.
+# doc-util-build image.
 #   System packages + Go toolchain only.
 #
 # Build with BuildKit (docker buildx build).

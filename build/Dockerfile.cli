@@ -12,13 +12,13 @@
 #   docker buildx build --target cli-windows-obfuscated -f build/Dockerfile.cli ...
 #     → ./dist/docutil.exe (garble obfuscated)
 #
-# Requires docutil_build:latest to exist first.
+# Requires doc-util-build:latest to exist first.
 # Each final stage is FROM scratch so --output=type=local exports
 # exactly the artifacts in /out, nothing else.
 # ================================================================
 
 # ── Linux GUI (OCR) builder ─────────────────────────────────────
-FROM docutil_build:latest AS cli-linux-builder
+FROM doc-util-build:latest AS cli-linux-builder
 # COPY . . also brings in build/deps/onnxruntime (see .dockerignore),
 # matching the cgo paths in internal/ocr/onnx_api.go.
 COPY . .
@@ -38,7 +38,7 @@ FROM scratch AS cli-linux
 COPY --from=cli-linux-builder /out/ /
 
 # ── Windows GUI: non-obfuscated ─────────────────────────────────
-FROM docutil_build:latest AS cli-windows-builder
+FROM doc-util-build:latest AS cli-windows-builder
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -50,7 +50,7 @@ FROM scratch AS cli-windows
 COPY --from=cli-windows-builder /out/ /
 
 # ── Windows GUI: garble-obfuscated ──────────────────────────────
-FROM docutil_build:latest AS cli-windows-obfuscated-builder
+FROM doc-util-build:latest AS cli-windows-obfuscated-builder
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

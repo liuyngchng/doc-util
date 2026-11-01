@@ -100,7 +100,7 @@ export GO_VERSION
   ${NO_PROXY_VAL:+"no_proxy=$NO_PROXY_VAL"}
 
 # ── Build image must exist ──────────────────────────────────────
-BUILD_IMAGE="docutil_build:latest"
+BUILD_IMAGE="doc-util-build:latest"
 if ! docker image inspect "$BUILD_IMAGE" &>/dev/null; then
   echo "Building image $BUILD_IMAGE ..."
   docker buildx build \

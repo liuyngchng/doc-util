@@ -1,12 +1,14 @@
+# syntax=docker/dockerfile:1
 # ================================================================
-# Production Docker image for the docutil MCP server.
+# Multi-stage production image for the docutil MCP server.
 #
-# This image only packages a PRE-BUILT binary from dist/ — it does NOT
-# compile. Build the binary first (inside Docker) then build the image:
+# Build:
+#   docker buildx build -t doc-util-mcp:$(cat VERSION) \
+#     -f build/Dockerfile.mcp \
+#     [--build-arg HTTP_PROXY=...] \
+#     .
 #
-#   ./build/build_mcp.sh                  # builds binary + image in one go
-#
-# Run (note: stdin must be attached, and stdout is the JSON-RPC transport):
+# Run (stdin must be attached, stdout is the JSON-RPC transport):
 #   docker run -i --rm doc-util-mcp:$(cat VERSION)
 #
 # Register in Claude Desktop's claude_desktop_config.json:
@@ -20,14 +22,20 @@
 #   }
 # ================================================================
 
+# ── Build stage ─────────────────────────────────────────────────
+FROM docutil_build:latest AS builder
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+    go build -mod=mod -ldflags='-s -w -r $ORIGIN' -o /out/doc-util-mcp ./cmd/mcp/
+
+# ── Runtime ─────────────────────────────────────────────────────
 FROM ubuntu:24.04
 
 ARG HTTP_PROXY=""
 ARG HTTPS_PROXY=""
 ARG NO_PROXY=""
-
-# ARG values are only available during build-time RUN commands;
-# they are NOT persisted into the final image (no ENV for proxy).
 
 RUN if [ -n "$HTTP_PROXY" ]; then \
         echo "Acquire::http::Proxy \"$HTTP_PROXY\";" > /etc/apt/apt.conf.d/01proxy; \
@@ -36,8 +44,9 @@ RUN if [ -n "$HTTP_PROXY" ]; then \
         echo "Acquire::https::Proxy \"$HTTPS_PROXY\";" >> /etc/apt/apt.conf.d/01proxy; \
     fi
 
-# Runtime deps: OpenCV libs for OCR + LibreOffice headless for legacy .doc support.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     libopencv-core406t64 \
     libopencv-imgproc406t64 \
     libreoffice-writer-nogui \
@@ -47,10 +56,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Pre-built binary + ONNX Runtime shared lib + OCR models.
-COPY dist/doc-util-mcp /app/doc-util-mcp
-COPY dist/libonnxruntime.so* /app/
-COPY dist/models /app/models
+COPY --from=builder /out/doc-util-mcp /app/doc-util-mcp
+# ONNX Runtime shared lib (symlink chain preserved by BuildKit COPY).
+COPY build/deps/onnxruntime/lib/libonnxruntime.so* /app/
+COPY models /app/models
 
 ENV LOG_LEVEL=info
 

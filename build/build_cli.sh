@@ -2,8 +2,11 @@
 set -euo pipefail
 
 # ────────────────────────────────────────────────────────────────
-# Build the GUI client binaries (Linux + Windows).
+# Build the GUI client binaries (Linux + Windows) with BuildKit.
 #   ./build/build_cli.sh                 # Linux GUI with OCR
+#
+# BuildKit manages Go build caches internally; no more host-side
+# gocache/gomodcache directories needed.
 #
 # Linux binary is built with full OCR support (OpenCV + ONNX Runtime).
 # Windows cross-compile uses -tags noocr (no OpenCV cross-link), but
@@ -14,7 +17,7 @@ set -euo pipefail
 # ────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-IMAGE="docutil_build:latest"
+BUILD_IMAGE="docutil_build:latest"
 
 # ── Usage ───────────────────────────────────────────────────────
 usage() {
@@ -23,7 +26,7 @@ usage() {
 
 参数说明:
   --no-obfuscate          关闭 Windows 构建的 garble 代码混淆（默认开启）
-  -x | verbose            输出 go build 的详细编译日志（-x）
+  -x | verbose            输出 go build 的详细编译日志（--progress=plain）
   -h | --help             显示本帮助并退出
 
 代理参数（可选，均不带 = 时也会继承环境变量）:
@@ -42,39 +45,39 @@ usage() {
 EOF
 }
 
-# ── Optional proxy ──────────────────────────────────────────────
+# ── Parse args ──────────────────────────────────────────────────
 HTTP_PROXY_VAL=""
 HTTPS_PROXY_VAL=""
 NO_PROXY_VAL=""
-GO_BUILD_X=""   # set to "-x" when verbose is requested
+PROGRESS=""
 OBFUSCATE=true
 for arg in "$@"; do
   case "$arg" in
     http_proxy=*|HTTP_PROXY=*)   HTTP_PROXY_VAL="${arg#*=}" ;;
     https_proxy=*|HTTPS_PROXY=*) HTTPS_PROXY_VAL="${arg#*=}" ;;
     no_proxy=*|NO_PROXY=*)       NO_PROXY_VAL="${arg#*=}" ;;
-    -x|verbose)                  GO_BUILD_X="-x" ;;
+    -x|verbose)                  PROGRESS="--progress=plain" ;;
     --no-obfuscate)              OBFUSCATE=false ;;
     -h|--help|help)              usage; exit 0 ;;
     *)                           echo "WARNING: 未知参数 '$arg'，已忽略（用 -h 查看用法）" ;;
   esac
 done
 
-# 打印参数用法说明，便于在日志里看到各参数含义
 if [[ -t 1 ]]; then
   usage
 fi
 
-# ── 总是输出当前构建参数（日志中可见） ────────────────────────────
+# ── Print build params ──────────────────────────────────────────
 echo ""
 echo "────────────────────────────────────────────────────────"
 echo "  构建参数:"
 echo "    OBFUSCATE      = $OBFUSCATE    (仅 Windows 构建)"
-echo "    GO_BUILD_X     = ${GO_BUILD_X:-(未设置)}"
+echo "    PROGRESS       = ${PROGRESS:-(auto)}"
 echo "    HTTP_PROXY     = ${HTTP_PROXY_VAL:-(未设置)}"
 echo "    HTTPS_PROXY    = ${HTTPS_PROXY_VAL:-(未设置)}"
 echo "────────────────────────────────────────────────────────"
 echo ""
+
 HTTP_PROXY_VAL="${HTTP_PROXY_VAL:-${HTTP_PROXY:-${http_proxy:-}}}"
 HTTPS_PROXY_VAL="${HTTPS_PROXY_VAL:-${HTTPS_PROXY:-${https_proxy:-}}}"
 NO_PROXY_VAL="${NO_PROXY_VAL:-${NO_PROXY:-${no_proxy:-}}}"
@@ -83,14 +86,12 @@ add_scheme() { local v="$1"; [[ -z "$v" || "$v" == *"://"* ]] && { printf '%s' "
 HTTP_PROXY_VAL="$(add_scheme "$HTTP_PROXY_VAL")"
 HTTPS_PROXY_VAL="$(add_scheme "$HTTPS_PROXY_VAL")"
 
-DOCKER_BUILD_ARGS=()
-DOCKER_RUN_ENV=()
+BUILD_ARGS=()
 if [[ -n "$HTTP_PROXY_VAL" || -n "$HTTPS_PROXY_VAL" ]]; then
   export HTTP_PROXY="$HTTP_PROXY_VAL" HTTPS_PROXY="$HTTPS_PROXY_VAL"
   export http_proxy="$HTTP_PROXY_VAL" https_proxy="$HTTPS_PROXY_VAL"
   export NO_PROXY="$NO_PROXY_VAL"     no_proxy="$NO_PROXY_VAL"
-  DOCKER_BUILD_ARGS=(--build-arg "HTTP_PROXY=$HTTP_PROXY_VAL" --build-arg "HTTPS_PROXY=$HTTPS_PROXY_VAL" --build-arg "NO_PROXY=$NO_PROXY_VAL")
-  DOCKER_RUN_ENV=(-e "HTTP_PROXY=$HTTP_PROXY_VAL" -e "HTTPS_PROXY=$HTTPS_PROXY_VAL" -e "NO_PROXY=$NO_PROXY_VAL" -e "http_proxy=$HTTP_PROXY_VAL" -e "https_proxy=$HTTPS_PROXY_VAL" -e "no_proxy=$NO_PROXY_VAL")
+  BUILD_ARGS+=(--build-arg "HTTP_PROXY=$HTTP_PROXY_VAL" --build-arg "HTTPS_PROXY=$HTTPS_PROXY_VAL" --build-arg "NO_PROXY=$NO_PROXY_VAL")
 fi
 
 cd "$SCRIPT_DIR"
@@ -105,140 +106,72 @@ if ! command -v docker &>/dev/null; then
   exit 1
 fi
 
-# ── Cache directories (mapped as volumes for speed) ──────────────
-GOCACHE_DIR="$SCRIPT_DIR/dist/cache/gocache"
-GOMODCACHE_DIR="$SCRIPT_DIR/dist/cache/gomodcache"
-mkdir -p "$GOCACHE_DIR" "$GOMODCACHE_DIR" "$SCRIPT_DIR/dist"
-
-# ── ONNX Runtime SDK (download if missing; uses proxy env) ───────
+# ── Go SDK + ONNX Runtime SDK (download if missing) ─────────────
+GO_VERSION="1.24.13"
+export GO_VERSION
+"$SCRIPT_DIR/build/ensure_go_sdk.sh"
 "$SCRIPT_DIR/build/ensure_onnxruntime.sh" \
   ${HTTP_PROXY_VAL:+"http_proxy=$HTTP_PROXY_VAL"} \
   ${HTTPS_PROXY_VAL:+"https_proxy=$HTTPS_PROXY_VAL"}
 
-# ── Go toolchain tarball (download if missing) ───────────────────
-GO_VERSION="1.24.13"
-GO_TARBALL="$SCRIPT_DIR/dist/cache/deps/go${GO_VERSION}.linux-amd64.tar.gz"
-GO_DOWNLOAD_URL="https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
-
-if [[ ! -f "$GO_TARBALL" ]]; then
-  mkdir -p "$(dirname "$GO_TARBALL")"
-  echo "Downloading Go ${GO_VERSION} toolchain ..."
-  if command -v curl &>/dev/null; then
-    curl -fL --retry 3 -o "$GO_TARBALL" "$GO_DOWNLOAD_URL"
-  elif command -v wget &>/dev/null; then
-    wget -O "$GO_TARBALL" "$GO_DOWNLOAD_URL"
-  else
-    echo "ERROR: neither curl nor wget found; cannot download Go toolchain"
-    exit 1
-  fi
-  echo "Go toolchain saved to $GO_TARBALL"
+# ── Build Docker image if missing ───────────────────────────────
+if ! docker image inspect "$BUILD_IMAGE" &>/dev/null; then
+  echo "Building Docker image $BUILD_IMAGE ..."
+  docker buildx build \
+    --load \
+    "${BUILD_ARGS[@]}" \
+    --build-arg "GO_VERSION=$GO_VERSION" \
+    -t "$BUILD_IMAGE" \
+    -f build/Dockerfile \
+    .
+  echo "Docker image $BUILD_IMAGE built"
 else
-  echo "Go toolchain tarball ready: $GO_TARBALL"
+  echo "Docker image $BUILD_IMAGE ready"
 fi
 
-# ── Build Docker image if missing ────────────────────────────────
-if ! docker image inspect "$IMAGE" &>/dev/null; then
-  echo "Building Docker image $IMAGE ..."
-  docker build "${DOCKER_BUILD_ARGS[@]}" --build-arg "GO_VERSION=$GO_VERSION" -t "$IMAGE" -f build/Dockerfile .
-  echo "Docker image $IMAGE built"
-else
-  echo "Docker image $IMAGE ready"
-fi
+# ── Clean old output ────────────────────────────────────────────
+rm -rf "$SCRIPT_DIR/dist/docutil" "$SCRIPT_DIR/dist/docutil.exe" \
+       "$SCRIPT_DIR"/dist/libopencv_*.so.* "$SCRIPT_DIR"/dist/libtbb.so* \
+       "$SCRIPT_DIR"/dist/libonnxruntime.so* "$SCRIPT_DIR/dist/models"
 
-COMMON_ENV=(
-  -e GOFLAGS="-buildvcs=false"
-  -e GOCACHE=/tmp/gocache
-  -e GOMODCACHE=/go/pkg/mod
-  -e GOPROXY="https://goproxy.cn,direct"
-  -e HOST_UID="$(id -u)"
-  -e HOST_GID="$(id -g)"
-)
+mkdir -p "$SCRIPT_DIR/dist"
 
-# ── Obfuscation (Windows only; Linux OCR build cannot use garble) ───
-if $OBFUSCATE; then
-  WIN_BUILD_BIN="garble -literals"
-  GARBLE_ENV=(-e GOGARBLE=docutil)
-  WIN_OBF_LABEL=" (obfuscated)"
-else
-  WIN_BUILD_BIN="go"
-  GARBLE_ENV=()
-  WIN_OBF_LABEL=""
-fi
-
-# ── 1. Linux GUI (always OCR) ────────────────────────────────────
+# ── 1. Linux GUI (always OCR) ───────────────────────────────────
 echo ""
 echo "=== Building docutil (Linux GUI, OCR) ==="
-docker run --rm \
-  -v "$SCRIPT_DIR":/workspace \
-  -v "$GOCACHE_DIR":/tmp/gocache \
-  -v "$GOMODCACHE_DIR":/go/pkg/mod \
-  -w /workspace \
-  "${COMMON_ENV[@]}" \
-  ${DOCKER_RUN_ENV[@]+"${DOCKER_RUN_ENV[@]}"} \
-  -e CGO_ENABLED=1 \
-  -e GOOS=linux \
-  -e GOARCH=amd64 \
-  "$IMAGE" \
-  bash -c "
-    rm -rf /workspace/dist/*
-    mkdir -p /workspace/dist
-    go build ${GO_BUILD_X} -mod=mod -ldflags='-s -w' -o dist/docutil . && \
-    chown \$HOST_UID:\$HOST_GID dist/docutil
-  "
+docker buildx build \
+  --target cli-linux \
+  --output "type=local,dest=$SCRIPT_DIR/dist" \
+  ${PROGRESS:+"$PROGRESS"} \
+  -f build/Dockerfile.cli \
+  .
 
-# ── Bundle OCR runtime deps ──────────────────────────────────────
-# Copy onnxruntime from vendored deps (preserve soname symlinks).
-cp -a "$SCRIPT_DIR/dist/cache/deps/onnxruntime/lib/libonnxruntime.so"* "$SCRIPT_DIR/dist/"
-echo "  bundled:  dist/libonnxruntime.so*"
+echo "  dist/docutil      ($(du -h "$SCRIPT_DIR/dist/docutil" | cut -f1))"
+echo "  bundled: dist/libonnxruntime.so*"
+echo "  bundled: dist/libopencv_*.so.406"
+echo "  bundled: dist/models/"
 
-# Copy OpenCV shared libs + patchelf rpath from the build image.
-docker run --rm -v "$SCRIPT_DIR":/workspace -w /workspace \
-  -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
-  "$IMAGE" bash -c '
-  set -euo pipefail
-  LIBDIR=/usr/lib/x86_64-linux-gnu
-  mkdir -p /workspace/dist
-  for lib in libopencv_imgproc.so.406 libopencv_core.so.406 libtbb.so.12; do
-    cp -L "$LIBDIR/$lib" /workspace/dist/
-    patchelf --set-rpath "\$ORIGIN" "/workspace/dist/$lib"
-    echo "  bundled:  dist/$lib"
-  done
-  chown "$HOST_UID":"$HOST_GID" /workspace/dist/libopencv_*.so.406 /workspace/dist/libtbb.so.12
-'
-
-# Copy OCR model files.
-cp -r "$SCRIPT_DIR/models" "$SCRIPT_DIR/dist/models"
-echo "  bundled:  dist/models/"
-
-# ── 2. Windows GUI (cross-compile, no OCR) ───────────────────────
-echo ""
-echo "=== Building docutil.exe (Windows GUI)${WIN_OBF_LABEL} ==="
-docker run --rm \
-  -v "$SCRIPT_DIR":/workspace \
-  -v "$GOCACHE_DIR":/tmp/gocache \
-  -v "$GOMODCACHE_DIR":/go/pkg/mod \
-  -w /workspace \
-  "${COMMON_ENV[@]}" \
-  ${DOCKER_RUN_ENV[@]+"${DOCKER_RUN_ENV[@]}"} \
-  ${GARBLE_ENV[@]+"${GARBLE_ENV[@]}"} \
-  -e CGO_ENABLED=1 \
-  -e GOOS=windows \
-  -e GOARCH=amd64 \
-  -e CC=x86_64-w64-mingw32-gcc \
-  -e CGO_LDFLAGS="-lucrt" \
-  "$IMAGE" \
-  bash -c "
-    rm -rf /workspace/dist/docutil.exe
-    ${WIN_BUILD_BIN} build ${GO_BUILD_X} -mod=mod -tags noocr -ldflags='-s -w -H windowsgui' -o dist/docutil.exe . && \
-    chown \$HOST_UID:\$HOST_GID dist/docutil.exe
-  "
+# ── 2. Windows GUI (cross-compile, no OCR) ──────────────────────
+if $OBFUSCATE; then
+  WIN_TARGET="cli-windows-obfuscated"
+  WIN_LABEL=" (obfuscated)"
+else
+  WIN_TARGET="cli-windows"
+  WIN_LABEL=""
+fi
 
 echo ""
-echo "=== Build complete ==="
-echo "  Linux GUI:    dist/docutil      ($(du -h "$SCRIPT_DIR/dist/docutil" | cut -f1))"
-echo "  Windows GUI:  dist/docutil.exe  ($(du -h "$SCRIPT_DIR/dist/docutil.exe" | cut -f1))"
+echo "=== Building docutil.exe (Windows GUI)${WIN_LABEL} ==="
+docker buildx build \
+  --target "$WIN_TARGET" \
+  --output "type=local,dest=$SCRIPT_DIR/dist" \
+  ${PROGRESS:+"$PROGRESS"} \
+  -f build/Dockerfile.cli \
+  .
 
-# ── Package into tar for distribution ─────────────────────────────
+echo "  dist/docutil.exe  ($(du -h "$SCRIPT_DIR/dist/docutil.exe" | cut -f1))"
+
+# ── Package into tar for distribution ───────────────────────────
 echo ""
 echo "--- Packaging ---"
 ARCHIVE_LINUX="docutil-linux-amd64.tar"
@@ -246,9 +179,7 @@ ARCHIVE_WIN="docutil-windows-amd64.tar"
 
 rm -f "$SCRIPT_DIR/dist/$ARCHIVE_LINUX" "$SCRIPT_DIR/dist/$ARCHIVE_WIN"
 
-# Linux: always bundle .so + models (OCR version).
-# Stage files into a directory first (tar --transform would also rewrite
-# symlink targets, breaking libonnxruntime.so -> .so.1 -> .so.1.27.1).
+# Linux: bundle .so + models into a staged directory then tar.
 STAGE_DIR="$SCRIPT_DIR/dist/docutil-linux-amd64"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
@@ -271,7 +202,7 @@ rm -rf \
   "$SCRIPT_DIR/dist/libtbb.so.12" \
   "$SCRIPT_DIR/dist/models"
 
-# Windows: single exe (text extraction via MuPDF only, no OCR).
+# Windows: single exe.
 cd "$SCRIPT_DIR/dist"
 tar -cf "$ARCHIVE_WIN" --transform='s,^,docutil-windows-amd64/,' docutil.exe
 cd "$SCRIPT_DIR"

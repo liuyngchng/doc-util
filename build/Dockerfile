@@ -1,10 +1,13 @@
+# syntax=docker/dockerfile:1
 # ================================================================
 # docutil build image.
 #   System packages + Go toolchain only.
 #
-# Go module cache is mapped from the host at build time via a volume
-# (see build_cli.sh), so dependencies are never downloaded inside the image
-# and rebuilds stay fast.
+# Build with BuildKit (docker buildx build).
+# The Go toolchain tarball must be downloaded first:
+#   build_cli.sh handles this, or manually:
+#   mkdir -p dist/cache/deps && cd dist/cache/deps
+#   curl -fLO https://go.dev/dl/go1.24.13.linux-amd64.tar.gz
 #
 # go-fitz bundles pre-built MuPDF static libs for ALL platforms
 # (linux/windows/darwin/…) so we do NOT need to compile MuPDF.
@@ -24,7 +27,9 @@ RUN if [ -n "$HTTP_PROXY" ]; then \
         echo "Acquire::https::Proxy \"$HTTPS_PROXY\";" >> /etc/apt/apt.conf.d/01proxy; \
     fi
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     # Build essentials
     ca-certificates gcc g++ libc6-dev pkg-config git \
     # MinGW-w64 (Windows cross-compilation)
@@ -51,6 +56,7 @@ ENV GOPROXY=https://goproxy.cn,direct
 
 # ── garble (Go obfuscator) ────────────────────────────────────────
 ENV GOBIN=/usr/local/go/bin
-RUN go install mvdan.cc/garble@v0.14.2
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go install mvdan.cc/garble@v0.14.2
 
 WORKDIR /workspace

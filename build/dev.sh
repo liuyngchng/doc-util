@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch a dev container for OCR development.
-# Maps the project directory into /workspace, same as build_cli.sh.
+# Maps the project directory into /workspace.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -56,12 +56,12 @@ if [[ -n "$HTTP_PROXY_VAL" || -n "$HTTPS_PROXY_VAL" ]]; then
   echo "代理: http=$HTTP_PROXY_VAL https=$HTTPS_PROXY_VAL no_proxy=$NO_PROXY_VAL"
 fi
 
-# ── Docker build arg / run env ───────────────────────────────────
-DOCKER_BUILD_ARGS=()
-DOCKER_RUN_ENV=()
+# ── Docker build args / run env ───────────────────────────────────
+BUILD_ARGS=()
+RUN_ENV=()
 if [[ -n "$HTTP_PROXY_VAL" || -n "$HTTPS_PROXY_VAL" ]]; then
-  DOCKER_BUILD_ARGS=(--build-arg "HTTP_PROXY=$HTTP_PROXY_VAL" --build-arg "HTTPS_PROXY=$HTTPS_PROXY_VAL" --build-arg "NO_PROXY=$NO_PROXY_VAL")
-  DOCKER_RUN_ENV=(
+  BUILD_ARGS+=(--build-arg "HTTP_PROXY=$HTTP_PROXY_VAL" --build-arg "HTTPS_PROXY=$HTTPS_PROXY_VAL" --build-arg "NO_PROXY=$NO_PROXY_VAL")
+  RUN_ENV=(
     -e "HTTP_PROXY=$HTTP_PROXY_VAL" -e "HTTPS_PROXY=$HTTPS_PROXY_VAL" -e "NO_PROXY=$NO_PROXY_VAL"
     -e "http_proxy=$HTTP_PROXY_VAL" -e "https_proxy=$HTTPS_PROXY_VAL" -e "no_proxy=$NO_PROXY_VAL"
   )
@@ -71,27 +71,37 @@ if [[ -t 1 ]]; then
   usage
 fi
 
-# ── ONNX Runtime SDK (download if missing; uses proxy env) ───────
+# ── Go SDK + ONNX Runtime SDK (download if missing) ─────────────
+GO_VERSION="1.24.13"
+export GO_VERSION
+"$SCRIPT_DIR/build/ensure_go_sdk.sh"
 "$SCRIPT_DIR/build/ensure_onnxruntime.sh" \
   ${HTTP_PROXY_VAL:+"http_proxy=$HTTP_PROXY_VAL"} \
   ${HTTPS_PROXY_VAL:+"https_proxy=$HTTPS_PROXY_VAL"} \
   ${NO_PROXY_VAL:+"no_proxy=$NO_PROXY_VAL"}
 
-# Build dev image if not present
-if ! docker image inspect "$IMAGE" &>/dev/null; then
-  echo "Building dev image $IMAGE ..."
-  docker build "${DOCKER_BUILD_ARGS[@]+"${DOCKER_BUILD_ARGS[@]}"}" -t "$IMAGE" -f build/Dockerfile .
-  echo "Done."
-fi
-
+# ── Persistent dev caches (host volumes → container; survives
+#    docker run --rm, so incremental dev builds stay fast) ────────
 GOCACHE_DIR="$SCRIPT_DIR/dist/cache/gocache_dev"
 GOMODCACHE_DIR="$SCRIPT_DIR/dist/cache/gomodcache"
 mkdir -p "$GOCACHE_DIR" "$GOMODCACHE_DIR"
 
+# Build dev image if not present
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+  echo "Building dev image $IMAGE ..."
+  docker buildx build \
+    --load \
+    "${BUILD_ARGS[@]}" \
+    --build-arg "GO_VERSION=$GO_VERSION" \
+    -t "$IMAGE" \
+    -f build/Dockerfile \
+    .
+  echo "Done."
+fi
+
 echo "Starting dev container. Use 'go build' or 'go test' inside."
-echo "  CGO LDFLAGS:  -L/workspace/dist/cache/deps/onnxruntime/lib -lonnxruntime"
-echo "  CGO CFLAGS:   -I/workspace/dist/cache/deps/onnxruntime/include"
 echo "  OpenCV:       pkg-config --cflags --libs opencv4"
+echo "  ONNX Runtime: build/deps/onnxruntime (cgo paths are in internal/ocr/onnx_api.go)"
 echo ""
 
 docker run --rm -it \
@@ -99,7 +109,7 @@ docker run --rm -it \
   -v "$GOCACHE_DIR":/tmp/gocache \
   -v "$GOMODCACHE_DIR":/go/pkg/mod \
   -w /workspace \
-  "${DOCKER_RUN_ENV[@]+"${DOCKER_RUN_ENV[@]}"}" \
+  "${RUN_ENV[@]+"${RUN_ENV[@]}"}" \
   -e GOCACHE=/tmp/gocache \
   -e GOMODCACHE=/go/pkg/mod \
   -e GOPROXY=https://goproxy.cn,direct \

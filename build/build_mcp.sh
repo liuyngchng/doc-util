@@ -5,8 +5,8 @@ set -euo pipefail
 # Build the production Docker image for the MCP server.
 #   ./build/build_mcp.sh
 #
-# The MCP server binary is compiled inside the build container, then
-# packaged into a slim production image (ubuntu:24.04 + OpenCV libs).
+# Uses BuildKit multi-stage build: the MCP binary is compiled and
+# packaged into a slim production image in one buildx invocation.
 # ────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,7 +18,7 @@ usage() {
 用法: ./build/build_mcp.sh [参数...]
 
 参数说明:
-  -x | verbose            输出 go build 的详细编译日志（-x）
+  -x | verbose            输出 go build 的详细编译日志（--progress=plain）
   -h | --help             显示本帮助并退出
 
 代理参数（可选，不带 = 时继承环境变量）:
@@ -47,7 +47,7 @@ if ! command -v docker &>/dev/null; then
 fi
 
 # ── 参数解析 ────────────────────────────────────────────────────
-GO_BUILD_X=""
+PROGRESS=""
 HTTP_PROXY_VAL=""
 HTTPS_PROXY_VAL=""
 NO_PROXY_VAL=""
@@ -57,7 +57,7 @@ for arg in "$@"; do
     http_proxy=*|HTTP_PROXY=*)   HTTP_PROXY_VAL="${arg#*=}" ;;
     https_proxy=*|HTTPS_PROXY=*) HTTPS_PROXY_VAL="${arg#*=}" ;;
     no_proxy=*|NO_PROXY=*)       NO_PROXY_VAL="${arg#*=}" ;;
-    -x|verbose)                  GO_BUILD_X="-x" ;;
+    -x|verbose)                  PROGRESS="--progress=plain" ;;
     -h|--help|help)              usage; exit 0 ;;
     *)                           echo "WARNING: 未知参数 '$arg'，已忽略（用 -h 查看用法）" ;;
   esac
@@ -79,81 +79,49 @@ if [[ -n "$HTTP_PROXY_VAL" || -n "$HTTPS_PROXY_VAL" ]]; then
   echo "代理: http=$HTTP_PROXY_VAL https=$HTTPS_PROXY_VAL no_proxy=$NO_PROXY_VAL"
 fi
 
-# ── Docker build arg / run env ───────────────────────────────────
-DOCKER_BUILD_ARGS=()
-DOCKER_RUN_ENV=()
+# ── Docker build args ───────────────────────────────────────────
+BUILD_ARGS=()
 if [[ -n "$HTTP_PROXY_VAL" || -n "$HTTPS_PROXY_VAL" ]]; then
-  DOCKER_BUILD_ARGS=(--build-arg "HTTP_PROXY=$HTTP_PROXY_VAL" --build-arg "HTTPS_PROXY=$HTTPS_PROXY_VAL" --build-arg "NO_PROXY=$NO_PROXY_VAL")
-  DOCKER_RUN_ENV=(
-    -e "HTTP_PROXY=$HTTP_PROXY_VAL" -e "HTTPS_PROXY=$HTTPS_PROXY_VAL" -e "NO_PROXY=$NO_PROXY_VAL"
-    -e "http_proxy=$HTTP_PROXY_VAL" -e "https_proxy=$HTTPS_PROXY_VAL" -e "no_proxy=$NO_PROXY_VAL"
-  )
+  BUILD_ARGS+=(--build-arg "HTTP_PROXY=$HTTP_PROXY_VAL" --build-arg "HTTPS_PROXY=$HTTPS_PROXY_VAL" --build-arg "NO_PROXY=$NO_PROXY_VAL")
 fi
 
 if [[ -t 1 ]]; then
   usage
 fi
 
-# ── Build image must exist ──────────────────────────────────────
-IMAGE="docutil_build:latest"
-if ! docker image inspect "$IMAGE" &>/dev/null; then
-  echo "Building image $IMAGE ..."
-  docker build "${DOCKER_BUILD_ARGS[@]+"${DOCKER_BUILD_ARGS[@]}"}" -t "$IMAGE" -f build/Dockerfile .
-  echo "Done."
-fi
-
-# ── Persistent Go caches ────────────────────────────────────────
-GOCACHE_DIR="$SCRIPT_DIR/dist/cache/gocache_dev"
-GOMODCACHE_DIR="$SCRIPT_DIR/dist/cache/gomodcache"
-mkdir -p "$GOCACHE_DIR" "$GOMODCACHE_DIR" "$SCRIPT_DIR/dist"
-
-# ── ONNX Runtime SDK (download if missing; uses proxy env) ───────
+# ── Go SDK + ONNX Runtime (download if missing) ─────────────────
+GO_VERSION="1.24.13"
+export GO_VERSION
+"$SCRIPT_DIR/build/ensure_go_sdk.sh"
 "$SCRIPT_DIR/build/ensure_onnxruntime.sh" \
   ${HTTP_PROXY_VAL:+"http_proxy=$HTTP_PROXY_VAL"} \
   ${HTTPS_PROXY_VAL:+"https_proxy=$HTTPS_PROXY_VAL"} \
   ${NO_PROXY_VAL:+"no_proxy=$NO_PROXY_VAL"}
 
-ONNXRT_LIB="$SCRIPT_DIR/dist/cache/deps/onnxruntime"
+# ── Build image must exist ──────────────────────────────────────
+BUILD_IMAGE="docutil_build:latest"
+if ! docker image inspect "$BUILD_IMAGE" &>/dev/null; then
+  echo "Building image $BUILD_IMAGE ..."
+  docker buildx build \
+    --load \
+    "${BUILD_ARGS[@]}" \
+    --build-arg "GO_VERSION=$GO_VERSION" \
+    -t "$BUILD_IMAGE" \
+    -f build/Dockerfile \
+    .
+  echo "Done."
+fi
 
-# ── 1. Build binary in build container ─────────────────────────
+# ── Build production image ──────────────────────────────────────
 echo ""
-echo "=== Step 1/2: Building doc-util-mcp binary ==="
-docker run --rm \
-  -v "$SCRIPT_DIR":/workspace \
-  -v "$GOCACHE_DIR":/tmp/gocache \
-  -v "$GOMODCACHE_DIR":/go/pkg/mod \
-  -w /workspace \
-  "${DOCKER_RUN_ENV[@]+"${DOCKER_RUN_ENV[@]}"}" \
-  -e GOFLAGS="-buildvcs=false" \
-  -e GOCACHE=/tmp/gocache \
-  -e GOMODCACHE=/go/pkg/mod \
-  -e GOPROXY="https://goproxy.cn,direct" \
-  -e CGO_ENABLED=1 \
-  -e CGO_LDFLAGS="-L/workspace/dist/cache/deps/onnxruntime/lib -lonnxruntime" \
-  -e CGO_CFLAGS="-I/workspace/dist/cache/deps/onnxruntime/include" \
-  -e GOOS=linux \
-  -e GOARCH=amd64 \
-  "$IMAGE" \
-  bash -c "
-    rm -rf /workspace/dist/doc-util-mcp
-    go build ${GO_BUILD_X} -mod=mod -ldflags='-s -w -r \$ORIGIN' -o dist/doc-util-mcp ./cmd/mcp/ && \
-    echo 'Build complete.'
-  "
-
-echo "  dist/doc-util-mcp ($(du -h "$SCRIPT_DIR/dist/doc-util-mcp" | cut -f1))"
-
-# ── 2. Bundle deps + package Docker image ───────────────────────
-rm -rf "$SCRIPT_DIR"/dist/libonnxruntime.so* "$SCRIPT_DIR/dist/models"
-
-cp -a "$ONNXRT_LIB/lib/libonnxruntime.so"* "$SCRIPT_DIR/dist/"
-cp -r "$SCRIPT_DIR/models" "$SCRIPT_DIR/dist/models"
-
-echo ""
-echo "=== Step 2/2: Building Docker image doc-util-mcp:$VERSION ==="
-docker build "${DOCKER_BUILD_ARGS[@]+"${DOCKER_BUILD_ARGS[@]}"}" -t doc-util-mcp:"$VERSION" -f build/Dockerfile.mcp "$SCRIPT_DIR"
-
-# Clean up intermediate files from dist/.
-rm -rf "$SCRIPT_DIR/dist/doc-util-mcp" "$SCRIPT_DIR"/dist/libonnxruntime.so* "$SCRIPT_DIR/dist/models"
+echo "=== Building doc-util-mcp:$VERSION (multi-stage, BuildKit) ==="
+docker buildx build \
+  --load \
+  "${BUILD_ARGS[@]}" \
+  ${PROGRESS:+"$PROGRESS"} \
+  -t "doc-util-mcp:$VERSION" \
+  -f build/Dockerfile.mcp \
+  .
 
 echo ""
 echo "=== Done ==="

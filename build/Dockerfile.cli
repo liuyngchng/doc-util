@@ -1,0 +1,64 @@
+# syntax=docker/dockerfile:1
+# ================================================================
+# Multi-stage build for the CLI GUI binaries.
+#
+# Build targets (build_cli.sh picks the right one):
+#   docker buildx build --target cli-linux -f build/Dockerfile.cli ...
+#     → ./dist/docutil + .so libs + models/
+#
+#   docker buildx build --target cli-windows -f build/Dockerfile.cli ...
+#     → ./dist/docutil.exe
+#
+#   docker buildx build --target cli-windows-obfuscated -f build/Dockerfile.cli ...
+#     → ./dist/docutil.exe (garble obfuscated)
+#
+# Requires docutil_build:latest to exist first.
+# Each final stage is FROM scratch so --output=type=local exports
+# exactly the artifacts in /out, nothing else.
+# ================================================================
+
+# ── Linux GUI (OCR) builder ─────────────────────────────────────
+FROM docutil_build:latest AS cli-linux-builder
+# COPY . . also brings in build/deps/onnxruntime (see .dockerignore),
+# matching the cgo paths in internal/ocr/onnx_api.go.
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+    go build -mod=mod -ldflags='-s -w' -o /out/docutil .
+RUN mkdir -p /out && \
+    for lib in libopencv_imgproc.so.406 libopencv_core.so.406 libtbb.so.12; do \
+      cp -L "/usr/lib/x86_64-linux-gnu/$lib" "/out/$lib"; \
+      patchelf --set-rpath '$ORIGIN' "/out/$lib"; \
+    done && \
+    cp -a build/deps/onnxruntime/lib/libonnxruntime.so* /out/ && \
+    cp -r models /out/models
+
+FROM scratch AS cli-linux
+COPY --from=cli-linux-builder /out/ /
+
+# ── Windows GUI: non-obfuscated ─────────────────────────────────
+FROM docutil_build:latest AS cli-windows-builder
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
+    CC=x86_64-w64-mingw32-gcc CGO_LDFLAGS="-lucrt" \
+    go build -mod=mod -tags noocr -ldflags='-s -w -H windowsgui' -o /out/docutil.exe .
+
+FROM scratch AS cli-windows
+COPY --from=cli-windows-builder /out/ /
+
+# ── Windows GUI: garble-obfuscated ──────────────────────────────
+FROM docutil_build:latest AS cli-windows-obfuscated-builder
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/.cache/garble \
+    CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
+    CC=x86_64-w64-mingw32-gcc CGO_LDFLAGS="-lucrt" \
+    GOGARBLE=docutil \
+    garble -literals build -mod=mod -tags noocr -ldflags='-s -w -H windowsgui' -o /out/docutil.exe .
+
+FROM scratch AS cli-windows-obfuscated
+COPY --from=cli-windows-obfuscated-builder /out/ /

@@ -1,10 +1,13 @@
-# Docker 构建上下文配置
+# Docker 构建上下文配置 — BuildKit multi-stage builds.
 #
-# 两种构建场景共用此文件：
-#   1. build_cli.sh —— 用 Dockerfile 构建 GUI，只需要 build/deps 下的 Go 工具链 tarball
-#   2. build_server.sh --docker —— 用 Dockerfile.server 构建 server，需要源码 + models + onnxruntime
+# 构建场景：
+#   1. build/build_cli.sh   → Dockerfile.cli（COPY . . 编译 → --output dist/）
+#   2. build/build.sh        → Dockerfile.server（multi-stage: COPY . . 编译 + 打包）
+#   3. build/build_mcp.sh    → Dockerfile.mcp（multi-stage: COPY . . 编译 + 打包）
+#   4. build/build.bat       → Windows 原生编译（不使用 Docker）
 #
-# 下面只排除真正不该进上下文的东西。
+# BuildKit 使用 COPY . . 时将包含上下文里所有未被排除的文件。
+# 下面排除大体积缓存和构建产物，减小 send context 体积。
 
 # VCS
 .git
@@ -19,29 +22,41 @@
 *~
 .DS_Store
 
-# 编译缓存（体积大，运行期通过 -v 挂载或镜像内重建）
+# 编译缓存（体积大，BuildKit 运行期通过 --mount=type=cache 管理或 dev 容器用 -v 挂载）
 dist/cache/gocache
 dist/cache/gocache_dev
 dist/cache/gomodcache
 
-# 自签名证书源（构建脚本会先复制到 dist/ 再进镜像）
-certs
+# ONNX Runtime 下载缓存（大 tarball，Dockerfile 用不到，解压产物在 build/deps/）
+dist/cache/deps/onnxruntime-linux-x64-*.tgz
 
-# 构建产物（server/MCP 镜像只需要 dist/ 下的 server 二进制、onnxruntime、models）
-vendor
+# 旧的 ONNX Runtime SDK 目录（ensure_onnxruntime.sh 之前放 dist/cache/deps/，现在放 build/deps/）
+dist/cache/deps/onnxruntime
+
+# 注意：dist/cache/deps/go*.tar.gz 不能排除 —— build/Dockerfile 用 COPY 引入它。
+
+# 自签名证书源（build.sh 会先复制到 dist/ 再 COPY；key 不应进上下文）
+certs
+# dist/cert.pem and dist/key.pem are staged by build.sh for Dockerfile.server — allow them.
+
+# 构建产物（multistage build 会生成新的，不需要旧产物发到 daemon）
 dist/*.tar
 dist/docutil
 dist/docutil.exe
-dist/docutil-linux-amd64/
-dist/docutil-windows-amd64/
+dist/docutil-linux-amd64
+dist/docutil-windows-amd64
+dist/doc-
+dist/doc-util-mcp
+dist/doc-util
 dist/libopencv_*.so.*
 dist/libtbb.so*
+dist/libonnxruntime.so*
+dist/models
 
-# 文档（Docker 镜像用不到）
+# 文档（镜像用不到）
 README.md
 API.md
 CLAUDE.md
 
-# 旧的 GUI 构建脚本（server 用不到）
-build.sh
-build/build.bat
+# 部署脚本（镜像用不到）
+deploy/

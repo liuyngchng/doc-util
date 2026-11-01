@@ -15,7 +15,7 @@ VERSION="$(cat "$SCRIPT_DIR/VERSION")"
 # ── Usage ───────────────────────────────────────────────────────
 usage() {
   cat <<'EOF'
-用法: ./build/build_server.sh [参数...]
+用法: ./build/build.sh [参数...]
 
 参数说明:
   -x | verbose            输出 go build 的详细编译日志（-x）

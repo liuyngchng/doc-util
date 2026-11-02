@@ -15,7 +15,7 @@ set -euo pipefail
 
 CONTAINER="doc-util"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="$(cat "$SCRIPT_DIR/VERSION")"
+VERSION="1.0.0"
 IMAGE="doc-util:$VERSION"
 
 # 确保镜像存在

@@ -10,7 +10,7 @@ set -euo pipefail
 #   ./build/build_server.sh
 #
 # 运行：
-#   ./deploy/deploy_server.sh
+#   ./deploy/deploy.sh
 # ────────────────────────────────────────────────────────────────
 
 CONTAINER="doc-util"
@@ -32,11 +32,13 @@ docker stop "$CONTAINER" 2>/dev/null || true
 docker rm "$CONTAINER" 2>/dev/null || true
 
 echo "正在创建容器 $CONTAINER ..."
+mkdir -p "$SCRIPT_DIR/cache"
 docker run -dit --name "$CONTAINER" \
   --restart unless-stopped \
   --security-opt seccomp=unconfined \
   --network llm_net \
   -v "$SCRIPT_DIR/logs:/app/logs" \
+  -v "$SCRIPT_DIR/cache:/app/cache" \
   -p 20002:8080 \
   "$IMAGE"
 

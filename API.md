@@ -241,6 +241,20 @@ Content-Type: application/json; charset=utf-8
 | `MAX_CONCURRENT_CONVERSIONS` | `4` | 并发转换上限（超限返回 429） |
 | `TLS_CERT_FILE` | (空) | TLS 证书路径（与 `TLS_KEY_FILE` 同时设置时启用 HTTPS） |
 | `TLS_KEY_FILE` | (空) | TLS 私钥路径 |
+| `CACHE_DB` | `cache.db` | 缓存数据库路径（bbolt 单文件，相对路径按二进制所在目录解析） |
+| `CACHE_TTL_HOURS` | `168` | 缓存条目有效期（小时），超过即视为未命中并删除 |
+| `CACHE_MAX_MB` | `2048` | 缓存总容量上限（MB），超限按最旧条目淘汰 |
+
+## 缓存行为
+
+四个转换/提取接口（`/convert/image`、`/convert/text`、`/convert/doc`、`/extract/txt`）都会对结果做持久化缓存，命中后直接返回，不再重新渲染 / OCR / 调用 LibreOffice。
+
+- **缓存键**：基于上传文件的 **SHA-256 内容哈希**。文件名不同但内容相同会命中同一缓存；内容不同但文件名相同则各自独立。
+- **接口隔离**：四个接口使用独立的缓存桶（bucket），同一文件在 `/convert/image` 与 `/convert/text` 的缓存互不干扰。
+- **热词参与**：`/convert/image` 的缓存键会额外纳入规范化后的热词集合（排序 + 小写 + 去重），因此相同文件 + 相同热词命中，热词不同则各自缓存。
+- **过期与淘汰**：缓存条目有效期 `CACHE_TTL_HOURS`（默认 168 小时 = 7 天）；总容量超过 `CACHE_MAX_MB`（默认 2 GiB）时，按最旧条目优先淘汰。
+- **存储**：使用 [bbolt](https://github.com/etcd-io/bbolt) 单文件数据库（`CACHE_DB`），持久化在进程重启之间保留。Docker 部署时挂载到 `/app/cache`。
+
 
 ## 示例
 

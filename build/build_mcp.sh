@@ -19,6 +19,7 @@ usage() {
 
 参数说明:
   -x | verbose            输出 go build 的详细编译日志（--progress=plain）
+  --no-prune              构建成功后不清理悬空镜像（默认清理）
   -h | --help             显示本帮助并退出
 
 代理参数（可选，不带 = 时继承环境变量）:
@@ -51,6 +52,7 @@ PROGRESS=""
 HTTP_PROXY_VAL=""
 HTTPS_PROXY_VAL=""
 NO_PROXY_VAL=""
+PRUNE=true
 
 for arg in "$@"; do
   case "$arg" in
@@ -58,6 +60,7 @@ for arg in "$@"; do
     https_proxy=*|HTTPS_PROXY=*) HTTPS_PROXY_VAL="${arg#*=}" ;;
     no_proxy=*|NO_PROXY=*)       NO_PROXY_VAL="${arg#*=}" ;;
     -x|verbose)                  PROGRESS="--progress=plain" ;;
+    --no-prune)                  PRUNE=false ;;
     -h|--help|help)              usage; exit 0 ;;
     *)                           echo "WARNING: 未知参数 '$arg'，已忽略（用 -h 查看用法）" ;;
   esac
@@ -122,6 +125,11 @@ docker buildx build \
   -t "doc-util-mcp:$VERSION" \
   -f build/Dockerfile.mcp \
   .
+
+# 构建成功后清理悬空镜像（可用 --no-prune 跳过）
+if $PRUNE; then
+  "$SCRIPT_DIR/build/prune_images.sh"
+fi
 
 echo ""
 echo "=== Done ==="

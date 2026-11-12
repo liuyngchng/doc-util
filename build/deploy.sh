@@ -17,7 +17,7 @@ TARGET="${1:-server}"
 
 case "$TARGET" in
   server)
-    exec "$SCRIPT_DIR/deploy/deploy_server.sh"
+    exec "$SCRIPT_DIR/deploy/deploy.sh"
     ;;
   mcp)
     exec "$SCRIPT_DIR/deploy/deploy_mcp.sh"

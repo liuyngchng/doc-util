@@ -4,7 +4,10 @@ go 1.24.0
 
 toolchain go1.24.13
 
-require github.com/gen2brain/go-fitz v1.28.2
+require (
+	github.com/gen2brain/go-fitz v1.28.2
+	go.etcd.io/bbolt v1.4.3
+)
 
 replace github.com/go-text/typesetting => github.com/go-text/typesetting v0.3.5
 

@@ -14,6 +14,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,15 +24,22 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
+	"docutil/internal/cache"
 	"docutil/internal/doc"
 	"docutil/internal/ocr"
 	"docutil/internal/pdf"
 	"docutil/internal/slogutil"
 )
+
+// resultCache is the process-wide result cache. It is initialised in main and
+// remains nil only if initialisation failed (which is a fatal startup error).
+var resultCache *cache.Cache
 
 func main() {
 	// Default handler writes to stderr so docker logs works.
@@ -56,6 +65,43 @@ func main() {
 		Level: slogLevel(),
 	}))
 	slog.SetDefault(slogger)
+
+	// ── Result cache ────────────────────────────────────────────────────
+	cacheDB := os.Getenv("CACHE_DB")
+	if cacheDB == "" {
+		cacheDB = "cache.db"
+	}
+	if !filepath.IsAbs(cacheDB) {
+		if exe, err := os.Executable(); err == nil {
+			cacheDB = filepath.Join(filepath.Dir(exe), cacheDB)
+		}
+	}
+
+	cacheMaxMB, _ := strconv.Atoi(os.Getenv("CACHE_MAX_MB"))
+	if cacheMaxMB <= 0 {
+		cacheMaxMB = 2048 // 2 GiB
+	}
+
+	cacheTTLHours, _ := strconv.Atoi(os.Getenv("CACHE_TTL_HOURS"))
+	if cacheTTLHours <= 0 {
+		cacheTTLHours = 168 // 7 days
+	}
+
+	var err error
+	resultCache, err = cache.Open(cacheDB, cache.Options{
+		MaxBytes: int64(cacheMaxMB) << 20,
+		TTL:      time.Duration(cacheTTLHours) * time.Hour,
+	})
+	if err != nil {
+		slog.Error("open cache db failed", "path", cacheDB, "error", err)
+		os.Exit(1)
+	}
+	defer resultCache.Close()
+	slog.Info("cache opened",
+		"path", cacheDB,
+		"max_mb", cacheMaxMB,
+		"ttl_hours", cacheTTLHours,
+	)
 
 	// Verify all required OCR models are present before serving. The server
 	// always integrates OCR (text conversion, extraction, seal detection), so
@@ -219,7 +265,7 @@ func handleConvertText(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleConvertDoc(w http.ResponseWriter, r *http.Request) {
-	docTmp, headerFilename, err := saveUpload(w, r)
+	docTmp, headerFilename, fileHash, err := saveUpload(w, r)
 	if err != nil {
 		return
 	}
@@ -229,6 +275,14 @@ func handleConvertDoc(w http.ResponseWriter, r *http.Request) {
 	if !doc.IsOLE2File(docTmp) {
 		slog.Warn("unsupported file type for /convert/doc", "filename", headerFilename)
 		http.Error(w, "unsupported file type: only .doc (OLE2) files are accepted for /convert/doc", http.StatusBadRequest)
+		return
+	}
+
+	// Cache hit: return the previously generated .docx without re-running
+	// LibreOffice.
+	if data, ok := resultCache.Get(cache.BucketDoc, fileHash); ok {
+		slog.Info("doc conversion cache hit", "filename", headerFilename, "cache_key", shortKey(fileHash))
+		serveDocxBytes(w, data, docxFilename(headerFilename, doc.ModeImage))
 		return
 	}
 
@@ -254,29 +308,35 @@ func handleConvertDoc(w http.ResponseWriter, r *http.Request) {
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 
-	// Stream the generated .docx back.
-	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, docxFilename(headerFilename, doc.ModeImage)))
-
-	docxF, err := os.Open(docxPath)
+	docxData, err := os.ReadFile(docxPath)
 	if err != nil {
-		slog.Error("open result failed", "error", err)
+		slog.Error("read result failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	defer docxF.Close()
-
-	if _, err := io.Copy(w, docxF); err != nil {
-		slog.Warn("stream response interrupted", "error", err)
+	if err := resultCache.Put(cache.BucketDoc, fileHash, docxData); err != nil {
+		slog.Warn("cache put failed", "bucket", cache.BucketDoc, "error", err)
 	}
+
+	serveDocxBytes(w, docxData, docxFilename(headerFilename, doc.ModeImage))
 }
 
 func handleExtractTxt(w http.ResponseWriter, r *http.Request) {
-	pdfTmp, filename, err := saveUpload(w, r)
+	pdfTmp, filename, fileHash, err := saveUpload(w, r)
 	if err != nil {
 		return
 	}
 	defer os.Remove(pdfTmp)
+
+	// Cache hit: return the stored JSON without re-extracting.
+	if data, ok := resultCache.Get(cache.BucketExtract, fileHash); ok {
+		slog.Info("extract text cache hit", "filename", filename, "cache_key", shortKey(fileHash))
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if _, err := w.Write(data); err != nil {
+			slog.Warn("extract text cache write failed", "error", err)
+		}
+		return
+	}
 
 	slog.Info("extract text started", "filename", filename)
 
@@ -299,12 +359,24 @@ func handleExtractTxt(w http.ResponseWriter, r *http.Request) {
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 
+	data, err := json.Marshal(result)
+	if err != nil {
+		slog.Error("marshal extract result failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := resultCache.Put(cache.BucketExtract, fileHash, data); err != nil {
+		slog.Warn("cache put failed", "bucket", cache.BucketExtract, "error", err)
+	}
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(result)
+	if _, err := w.Write(data); err != nil {
+		slog.Warn("extract text write failed", "error", err)
+	}
 }
 
 func convertAndServe(w http.ResponseWriter, r *http.Request, mode doc.ConvertMode, hotwords []string) {
-	pdfTmp, headerFilename, err := saveUpload(w, r)
+	pdfTmp, headerFilename, fileHash, err := saveUpload(w, r)
 	if err != nil {
 		return
 	}
@@ -314,6 +386,19 @@ func convertAndServe(w http.ResponseWriter, r *http.Request, mode doc.ConvertMod
 	if !isPDFFile(pdfTmp) {
 		slog.Warn("unsupported file type for conversion", "filename", headerFilename)
 		http.Error(w, "unsupported file type: only PDF files are accepted for /convert/image and /convert/text", http.StatusBadRequest)
+		return
+	}
+
+	bucket, key := convertCacheKey(mode, fileHash, hotwords)
+
+	// Cache hit: return the previously generated .docx without re-converting.
+	if data, ok := resultCache.Get(bucket, key); ok {
+		slog.Info("conversion cache hit",
+			"filename", headerFilename,
+			"mode", mode,
+			"cache_key", shortKey(key),
+		)
+		serveDocxBytes(w, data, docxFilename(headerFilename, mode))
 		return
 	}
 
@@ -351,32 +436,82 @@ func convertAndServe(w http.ResponseWriter, r *http.Request, mode doc.ConvertMod
 		"mode", mode,
 	)
 
-	// Stream the generated .docx back.
-	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, docxFilename(headerFilename, mode)))
-
-	docxF, err := os.Open(docxPath)
+	docxData, err := os.ReadFile(docxPath)
 	if err != nil {
-		slog.Error("open result failed", "error", err)
+		slog.Error("read result failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	defer docxF.Close()
+	if err := resultCache.Put(bucket, key, docxData); err != nil {
+		slog.Warn("cache put failed", "bucket", bucket, "error", err)
+	}
 
-	if _, err := io.Copy(w, docxF); err != nil {
+	serveDocxBytes(w, docxData, docxFilename(headerFilename, mode))
+}
+
+// convertCacheKey returns the (bucket, key) pair for a PDF conversion. Image
+// mode includes a canonicalised hotword hash so that different hotword sets
+// cache independently; text mode has no hotwords so it keys on the file alone.
+func convertCacheKey(mode doc.ConvertMode, fileHash []byte, hotwords []string) (string, []byte) {
+	if mode == doc.ModeText {
+		return cache.BucketText, fileHash
+	}
+
+	// Image mode: incorporate the hotwords into the key. Canonicalise (sort +
+	// lowercase + de-dupe) so that semantically identical hotword inputs share
+	// a cache entry.
+	key := make([]byte, len(fileHash)+sha256.Size)
+	copy(key, fileHash)
+	h := sha256.New()
+	if len(hotwords) > 0 {
+		canon := make([]string, len(hotwords))
+		for i, hw := range hotwords {
+			canon[i] = strings.ToLower(hw)
+		}
+		sort.Strings(canon)
+		// De-duplicate adjacent equal entries.
+		uniq := canon[:0]
+		for i, s := range canon {
+			if i == 0 || s != canon[i-1] {
+				uniq = append(uniq, s)
+			}
+		}
+		for _, s := range uniq {
+			h.Write([]byte(s))
+			h.Write([]byte{0})
+		}
+	}
+	sum := h.Sum(nil)
+	copy(key[len(fileHash):], sum)
+	return cache.BucketImage, key
+}
+
+// shortKey returns a short hex identifier for a cache key (first 8 bytes of
+// its SHA-256), for human-readable log correlation.
+func shortKey(key []byte) string {
+	sum := sha256.Sum256(key)
+	return hex.EncodeToString(sum[:4])
+}
+
+// serveDocxBytes writes a DOCX payload with the appropriate headers.
+func serveDocxBytes(w http.ResponseWriter, data []byte, filename string) {
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	if _, err := w.Write(data); err != nil {
 		slog.Warn("stream response interrupted", "error", err)
 	}
 }
 
-// saveUpload reads a multipart file upload and writes it to a temp file.
-// On success it returns the temp file path and original filename.
+// saveUpload reads a multipart file upload, writes it to a temp file, and
+// computes the file's SHA-256 content hash for cache keying.
+// On success it returns the temp file path, original filename, and hash.
 // On error it writes the HTTP error and returns a non-nil err.
-func saveUpload(w http.ResponseWriter, r *http.Request) (tmpPath, filename string, err error) {
+func saveUpload(w http.ResponseWriter, r *http.Request) (tmpPath, filename string, fileHash []byte, err error) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		slog.Warn("parse multipart failed", "error", err)
 		http.Error(w, fmt.Sprintf("failed to parse form: %v", err), http.StatusBadRequest)
-		return "", "", err
+		return "", "", nil, err
 	}
 	defer r.MultipartForm.RemoveAll()
 
@@ -384,7 +519,7 @@ func saveUpload(w http.ResponseWriter, r *http.Request) (tmpPath, filename strin
 	if err != nil {
 		slog.Warn("missing file field", "error", err)
 		http.Error(w, "missing file field", http.StatusBadRequest)
-		return "", "", err
+		return "", "", nil, err
 	}
 	defer file.Close()
 
@@ -397,23 +532,25 @@ func saveUpload(w http.ResponseWriter, r *http.Request) (tmpPath, filename strin
 	if err != nil {
 		slog.Error("create temp file failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
-		return "", "", err
+		return "", "", nil, err
 	}
 
-	if _, err := io.Copy(tmp, file); err != nil {
+	hasher := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, hasher), file); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
 		slog.Error("write temp file failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
-		return "", "", err
+		return "", "", nil, err
 	}
 	tmp.Close()
 
 	slog.Info("upload saved",
 		"filename", header.Filename,
 		"size_bytes", header.Size,
+		"sha256", hex.EncodeToString(hasher.Sum(nil)),
 	)
-	return tmp.Name(), header.Filename, nil
+	return tmp.Name(), header.Filename, hasher.Sum(nil), nil
 }
 
 // isPDFFile checks whether the file at path is a PDF by magic bytes.

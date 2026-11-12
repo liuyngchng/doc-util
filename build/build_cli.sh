@@ -26,6 +26,7 @@ usage() {
 
 参数说明:
   --no-obfuscate          关闭 Windows 构建的 garble 代码混淆（默认开启）
+  --no-prune              构建成功后不清理悬空镜像（默认清理）
   -x | verbose            输出 go build 的详细编译日志（--progress=plain）
   -h | --help             显示本帮助并退出
 
@@ -51,6 +52,7 @@ HTTPS_PROXY_VAL=""
 NO_PROXY_VAL=""
 PROGRESS=""
 OBFUSCATE=true
+PRUNE=true
 for arg in "$@"; do
   case "$arg" in
     http_proxy=*|HTTP_PROXY=*)   HTTP_PROXY_VAL="${arg#*=}" ;;
@@ -58,6 +60,7 @@ for arg in "$@"; do
     no_proxy=*|NO_PROXY=*)       NO_PROXY_VAL="${arg#*=}" ;;
     -x|verbose)                  PROGRESS="--progress=plain" ;;
     --no-obfuscate)              OBFUSCATE=false ;;
+    --no-prune)                  PRUNE=false ;;
     -h|--help|help)              usage; exit 0 ;;
     *)                           echo "WARNING: 未知参数 '$arg'，已忽略（用 -h 查看用法）" ;;
   esac
@@ -208,6 +211,11 @@ tar -cf "$ARCHIVE_WIN" --transform='s,^,docutil-windows-amd64/,' docutil.exe
 cd "$SCRIPT_DIR"
 echo "  $ARCHIVE_WIN  ($(du -h "$SCRIPT_DIR/dist/$ARCHIVE_WIN" | cut -f1))"
 rm -f "$SCRIPT_DIR/dist/docutil.exe"
+
+# 构建成功后清理悬空镜像（可用 --no-prune 跳过）
+if $PRUNE; then
+  "$SCRIPT_DIR/build/prune_images.sh"
+fi
 
 echo ""
 echo "分发文件（做好了的压缩包）:"

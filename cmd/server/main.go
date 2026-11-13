@@ -256,12 +256,16 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleCacheClear(w http.ResponseWriter, r *http.Request) {
+	before := resultCache.TotalBytes()
 	if err := resultCache.Clear(); err != nil {
-		slog.Error("cache clear failed", "error", err)
+		slog.Error("cache clear failed", "size_before_bytes", before, "error", err)
 		http.Error(w, "cache clear failed", http.StatusInternalServerError)
 		return
 	}
-	slog.Info("cache cleared")
+	slog.Info("cache cleared",
+		"size_before_bytes", before,
+		"size_after_bytes", resultCache.TotalBytes(),
+	)
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write([]byte(`{"status":"cleared"}`)); err != nil {
 		slog.Warn("cache clear response write failed", "error", err)

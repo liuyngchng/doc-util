@@ -194,6 +194,16 @@ func (c *Cache) Clear() error {
 	})
 }
 
+// TotalBytes returns the current total stored size in bytes across all buckets.
+func (c *Cache) TotalBytes() int64 {
+	var n int64
+	_ = c.db.View(func(tx *bolt.Tx) error {
+		n = c.total(tx)
+		return nil
+	})
+	return n
+}
+
 // encode wraps payload with an 8-byte big-endian Unix-seconds timestamp header.
 func encode(created time.Time, data []byte) []byte {
 	v := make([]byte, 8+len(data))

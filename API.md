@@ -10,6 +10,7 @@ HTTP 服务，接收 PDF / DOCX / .doc 文件，返回转换结果。提供四�
 | `/convert/text` | 文字版 | `.text.docx` | PDF |
 | `/convert/doc` | .doc 转换 | `.docx` | .doc (OLE2) |
 | `/extract/txt` | 纯文本 | JSON | PDF / DOCX / .doc |
+| `/cache/clear` | 清理缓存 | JSON | — |
 
 ---
 
@@ -217,6 +218,31 @@ Content-Type: application/json; charset=utf-8
 - **DOCX**：仅处理正文 `word/document.xml` 与 `word/media/` 内嵌图片，不含页眉、页脚、脚注、文本框；无法解码的图片格式（如 EMF/WMF）会被跳过。
 - **.doc**：依赖 LibreOffice 转换质量，复杂排版（表格、多栏、嵌入对象）可能有差异。LibreOffice 未安装时返回 500 错误。
 - **印章检测**：仅检测圆形/椭圆形的印章区域并提取其文字，不判断印章类型（如「公章」「合同章」「财务章」）；印章文字识别依赖 OCR 模型，识别精度受印章颜色（红章在灰度/彩色渲染下的对比度）影响。
+
+---
+
+### 6. 清理缓存
+
+```
+DELETE /cache/clear
+```
+
+清空全部持久化缓存（所有桶的所有条目），并将缓存占用大小归零。无需请求体。
+
+**成功响应**
+
+```
+200 OK
+Content-Type: application/json
+
+{"status":"cleared"}
+```
+
+**示例**
+
+```bash
+curl -X DELETE -k --noproxy "*" https://localhost:8443/cache/clear -w'\n'
+```
 
 ---
 

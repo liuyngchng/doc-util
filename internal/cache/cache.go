@@ -173,6 +173,27 @@ func (c *Cache) evict(tx *bolt.Tx) error {
 	return nil
 }
 
+// Clear removes every cached entry across all buckets and resets the stored
+// total size to zero.
+func (c *Cache) Clear() error {
+	return c.db.Update(func(tx *bolt.Tx) error {
+		for _, name := range []string{BucketImage, BucketText, BucketDoc, BucketExtract} {
+			b := tx.Bucket([]byte(name))
+			if b == nil {
+				continue
+			}
+			cur := b.Cursor()
+			for k, _ := cur.First(); k != nil; k, _ = cur.Next() {
+				if err := cur.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+		c.setTotal(tx, 0)
+		return nil
+	})
+}
+
 // encode wraps payload with an 8-byte big-endian Unix-seconds timestamp header.
 func encode(created time.Time, data []byte) []byte {
 	v := make([]byte, 8+len(data))

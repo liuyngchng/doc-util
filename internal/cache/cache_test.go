@@ -94,3 +94,40 @@ func TestCloseRemovesNothing(t *testing.T) {
 		t.Fatalf("db file should persist after Close: %v", err)
 	}
 }
+
+func TestClear(t *testing.T) {
+	c := openTemp(t, Options{TTL: time.Hour, MaxBytes: 1 << 20})
+
+	// Put entries in every bucket.
+	_ = c.Put(BucketImage, []byte("img1"), []byte("a"))
+	_ = c.Put(BucketText, []byte("txt1"), []byte("b"))
+	_ = c.Put(BucketDoc, []byte("doc1"), []byte("c"))
+	_ = c.Put(BucketExtract, []byte("ext1"), []byte("d"))
+
+	if err := c.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+
+	for _, b := range []string{BucketImage, BucketText, BucketDoc, BucketExtract} {
+		if _, ok := c.Get(b, []byte("img1")); ok {
+			t.Fatalf("expected miss in bucket %s after Clear", b)
+		}
+		if _, ok := c.Get(b, []byte("txt1")); ok {
+			t.Fatalf("expected miss in bucket %s after Clear", b)
+		}
+		if _, ok := c.Get(b, []byte("doc1")); ok {
+			t.Fatalf("expected miss in bucket %s after Clear", b)
+		}
+		if _, ok := c.Get(b, []byte("ext1")); ok {
+			t.Fatalf("expected miss in bucket %s after Clear", b)
+		}
+	}
+
+	// Re-populate after Clear: cache should work normally.
+	if err := c.Put(BucketImage, []byte("newk"), []byte("newv")); err != nil {
+		t.Fatalf("Put after Clear: %v", err)
+	}
+	if got, ok := c.Get(BucketImage, []byte("newk")); !ok || string(got) != "newv" {
+		t.Fatalf("after Clear: got %q ok=%v, want %q", got, ok, "newv")
+	}
+}

@@ -10,6 +10,7 @@
 //	POST /convert/text   → text-layer DOCX (extract text for native PDFs, OCR for scans)
 //	POST /convert/doc    → .doc to .docx conversion (via LibreOffice)
 //	POST /extract/txt    → plain text string (PDF or DOCX input; OCR for image-only content)
+//	DELETE /cache/clear  → clear the persistent result cache
 package main
 
 import (
@@ -130,6 +131,7 @@ func main() {
 	mux.HandleFunc("POST /convert/doc", limit(maxConcurrent, handleConvertDoc))
 	mux.HandleFunc("POST /extract/txt", limit(maxConcurrent, handleExtractTxt))
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("DELETE /cache/clear", handleCacheClear)
 
 	srv := &http.Server{
 		Addr:         ":" + port,
@@ -250,6 +252,19 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
 		slog.Warn("health response write failed", "error", err)
+	}
+}
+
+func handleCacheClear(w http.ResponseWriter, r *http.Request) {
+	if err := resultCache.Clear(); err != nil {
+		slog.Error("cache clear failed", "error", err)
+		http.Error(w, "cache clear failed", http.StatusInternalServerError)
+		return
+	}
+	slog.Info("cache cleared")
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write([]byte(`{"status":"cleared"}`)); err != nil {
+		slog.Warn("cache clear response write failed", "error", err)
 	}
 }
 

@@ -263,7 +263,7 @@ curl -X DELETE -k --noproxy "*" https://localhost:8443/cache/clear -w'\n'
 |----------|--------|------|
 | `PORT` | `8080` | 监听端口 |
 | `LOG_LEVEL` | `info` | 日志级别：`debug` / `info` / `warn` / `error` |
-| `LOG_DIR` | (空) | 日志输出目录（不设置则只写 stderr） |
+| `LOG_DIR` | (空) | 日志输出目录（不设置则只写 stderr）。设置后写入 `server.log`，按天滚动，前一天日志 gzip 压缩为 `server.log.<日期>.gz` |
 | `MAX_CONCURRENT_CONVERSIONS` | `4` | 并发转换上限（超限返回 429） |
 | `TLS_CERT_FILE` | (空) | TLS 证书路径（与 `TLS_KEY_FILE` 同时设置时启用 HTTPS） |
 | `TLS_KEY_FILE` | (空) | TLS 私钥路径 |

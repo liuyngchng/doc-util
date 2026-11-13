@@ -46,18 +46,20 @@ func main() {
 	// Default handler writes to stderr so docker logs works.
 	logWriters := []io.Writer{os.Stderr}
 
-	// If LOG_DIR is set, also write to a rotating daily log file.
+	// If LOG_DIR is set, also write to a daily rotating log file. The previous
+	// day's log is gzip-compressed as server.log.<date>.gz on rotation.
 	if logDir := os.Getenv("LOG_DIR"); logDir != "" {
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			fmt.Fprintf(os.Stderr, "WARN: cannot create LOG_DIR %s: %v\n", logDir, err)
 		} else {
-			logFile := filepath.Join(logDir, "server.log")
-			f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			logFile, err := slogutil.NewDailyWriter(logDir, "server.log")
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "WARN: cannot open log file %s: %v\n", logFile, err)
+				fmt.Fprintf(os.Stderr, "WARN: cannot open log file in %s: %v\n", logDir, err)
 			} else {
-				logWriters = append(logWriters, f)
-				fmt.Fprintf(os.Stderr, "Logging to %s\n", logFile)
+				defer logFile.Close()
+				logWriters = append(logWriters, logFile)
+				fmt.Fprintf(os.Stderr, "Logging to %s (daily rotation, gzip-compressed)\n",
+					filepath.Join(logDir, "server.log"))
 			}
 		}
 	}

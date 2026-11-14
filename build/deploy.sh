@@ -6,7 +6,7 @@ set -euo pipefail
 #   ./build/deploy.sh              # 部署 server
 #   ./build/deploy.sh mcp          # 部署 mcp
 #
-# 要求镜像已存在（先执行 ./build/build_server.sh 或 build_mcp.sh）。
+# 要求镜像已存在（先执行 ./build/build.sh 或 build_mcp.sh）。
 # 部署完成后自动 docker logs -f 跟踪容器日志。
 # ────────────────────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ case "$TARGET" in
     echo "  mcp     部署 doc-util-mcp"
     echo ""
     echo "部署前请先构建镜像："
-    echo "  ./build/build_server.sh"
+    echo "  ./build/build.sh"
     echo "  ./build/build_mcp.sh"
     exit 0
     ;;

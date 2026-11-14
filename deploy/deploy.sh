@@ -7,7 +7,7 @@ set -euo pipefail
 #   - 以容器名 doc-util 注册到网桥，供网桥内其他容器访问
 #
 # 使用前先构建镜像：
-#   ./build/build_server.sh
+#   ./build/build.sh
 #
 # 运行：
 #   ./deploy/deploy.sh
@@ -20,7 +20,7 @@ IMAGE="doc-util:$VERSION"
 
 # 确保镜像存在
 if ! docker image inspect "$IMAGE" &>/dev/null; then
-  echo "错误：镜像 $IMAGE 不存在，请先执行 ./build/build_server.sh"
+  echo "错误：镜像 $IMAGE 不存在，请先执行 ./build/build.sh"
   exit 1
 fi
 

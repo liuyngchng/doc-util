@@ -18,7 +18,7 @@ set -euo pipefail
 
 CONTAINER="doc-util-mcp"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="$(cat "$SCRIPT_DIR/VERSION")"
+VERSION="1.0.0"
 IMAGE="doc-util-mcp:$VERSION"
 
 # 确保镜像存在

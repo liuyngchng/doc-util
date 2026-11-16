@@ -71,6 +71,15 @@ func (w *dailyWriter) rotate() error {
 		if err := compressFile(path, filepath.Join(w.dir, w.base+"."+w.openDate+".gz")); err != nil {
 			fmt.Fprintf(os.Stderr, "WARN: compressing log file %s: %v\n", path, err)
 		}
+	} else if fi, err := os.Stat(path); err == nil {
+		// No file open yet (first open after startup). If an existing log
+		// file is from a previous day, compress it before starting today's.
+		fileDate := fi.ModTime().Format("2006-01-02")
+		if fileDate != today {
+			if err := compressFile(path, filepath.Join(w.dir, w.base+"."+fileDate+".gz")); err != nil {
+				fmt.Fprintf(os.Stderr, "WARN: compressing log file %s: %v\n", path, err)
+			}
+		}
 	}
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
